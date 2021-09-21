@@ -1,0 +1,82 @@
+---
+- name: Update server
+  yum:
+    name: "*"
+    state: latest
+- name: Install epel-release
+  yum:
+    name: epel-release
+    state: latest
+- name: Download Remi-repo
+  get_url:
+    url: "https://rpms.remirepo.net/enterprise/remi-release-7.rpm"
+    dest: /tmp/remi-release-7.rpm
+- name: Install Remi-repo
+  yum:
+    name: /tmp/remi-release-7.rpm
+    state: present
+- name: Add the user 'ansible_user' with a bash shell, adding group wheels
+  ansible.builtin.user:
+    name: ansible_user
+    password: "{{ password }}"
+    shell: /bin/bash
+    groups: wheel
+    append: yes
+- name: Allow 'wheel' group to have passwordless sudo
+  lineinfile:
+    dest: /etc/sudoers
+    state: present
+    regexp: "^%wheel"
+    line: "%wheel ALL=(ALL) NOPASSWD: ALL"
+- name: add authorized key
+  authorized_key:
+    user: ansible_user
+    state: present
+    key: "{{ lookup('file', lookup('env','HOME') + '/.ssh/id_rsa.pub') }}"
+- name: disable password authorization
+  lineinfile:
+    dest: "{{ sshd_config }}"
+    regexp: '^(#\s*)?PasswordAuthentication '
+    line: "PasswordAuthentication no"
+- name: Disable remote root login
+  lineinfile:
+    dest: "{{ sshd_config }}"
+    regexp: "^#?PermitRootLogin"
+    line: "PermitRootLogin no"
+  notify: restart sshd
+- name: Import Remi GPG key.
+  rpm_key: "key={{ item }} state=present"
+  with_items:
+    - "http://rpms.famillecollet.com/RPM-GPG-KEY-remi"
+
+- name: Install Remi repo.
+  command: "rpm -Uvh --force {{ item.href }} creates={{ item.creates }}"
+  with_items:
+    - href: "http://rpms.famillecollet.com/enterprise/remi-release-6.rpm"
+      creates: "/etc/yum.repos.d/remi.repo"
+- name: Install Node.js and npm.
+  yum: name=npm state=present enablerepo=epel
+- name: Install Forever (to run our Node.js app).
+  npm: name=forever global=yes state=latest
+- name: Copy app.js to host
+  copy:
+    src: app.js
+    dest: /home/ansible_user/
+    owner: ansible_user
+    group: ansible_user
+- name: Copy package.json to host
+  copy:
+    src: package.json
+    dest: /home/ansible_user/
+    owner: ansible_user
+    group: ansible_user
+- name: Install dependecies
+  npm:
+    path: /home/ansible_user/project/
+    state: present
+
+- name: Run app
+  command: "forever start app.js"
+  args:
+    chdir: "/home/ansible_user/project"
+  notify: check_service
